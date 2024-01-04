@@ -5129,6 +5129,8 @@ fuse_init(xlator_t *this, fuse_in_header_t *finh, void *msg,
     pthread_t messenger;
 #endif
     pthread_t delayer;
+    uint64_t inargflags = 0;
+    uint64_t outargflags = 0;
 
     priv = this->private;
 
@@ -5151,29 +5153,35 @@ fuse_init(xlator_t *this, fuse_in_header_t *finh, void *msg,
     }
     priv->proto_minor = fini->minor;
 
+    inargflags = fini->flags;
+#if FUSE_KERNEL_MINOR_VERSION >= 36
+    if (inargflags & FUSE_INIT_EXT)
+        inargflags = inargflags | (uint64_t) fini->flags2 << 32;
+#endif
+
     fino.major = FUSE_KERNEL_VERSION;
     fino.minor = FUSE_KERNEL_MINOR_VERSION;
     fino.max_readahead = 1 << 17;
     fino.max_write = 1 << 17;
-    fino.flags = FUSE_ASYNC_READ | FUSE_POSIX_LOCKS;
+    outargflags = FUSE_ASYNC_READ | FUSE_POSIX_LOCKS;
 #if FUSE_KERNEL_MINOR_VERSION >= 17
     if (fini->minor >= 17)
-        fino.flags |= FUSE_FLOCK_LOCKS;
+        outargflags |= FUSE_FLOCK_LOCKS;
 #endif
 #if FUSE_KERNEL_MINOR_VERSION >= 12
     if (fini->minor >= 12) {
         /* let fuse leave the umask processing to us, so that it does not
          * break extended POSIX ACL defaults on server */
-        fino.flags |= FUSE_DONT_MASK;
+        outargflags |= FUSE_DONT_MASK;
     }
 #endif
 #if FUSE_KERNEL_MINOR_VERSION >= 9
     if (fini->minor >= 6 /* fuse_init_in has flags */ &&
-        fini->flags & FUSE_BIG_WRITES) {
+        inargflags & FUSE_BIG_WRITES) {
         /* no need for direct I/O mode by default if big writes are supported */
         if (priv->direct_io_mode == 2)
             priv->direct_io_mode = 0;
-        fino.flags |= FUSE_BIG_WRITES;
+        outargflags |= FUSE_BIG_WRITES;
     }
 
     /* Start the thread processing timed responses */
@@ -5227,8 +5235,8 @@ fuse_init(xlator_t *this, fuse_in_header_t *finh, void *msg,
         *priv->msg0_len_p = sizeof(*finh) + FUSE_COMPAT_WRITE_IN_SIZE;
 
     if (priv->use_readdirp) {
-        if (fini->flags & FUSE_DO_READDIRPLUS)
-            fino.flags |= FUSE_DO_READDIRPLUS;
+        if (inargflags & FUSE_DO_READDIRPLUS)
+            outargflags |= FUSE_DO_READDIRPLUS;
     }
 #endif
     if (priv->fopen_keep_cache == 2) {
@@ -5239,7 +5247,7 @@ fuse_init(xlator_t *this, fuse_in_header_t *finh, void *msg,
         priv->fopen_keep_cache = 1;
 
 #if FUSE_KERNEL_MINOR_VERSION >= 20
-        if (fini->flags & FUSE_AUTO_INVAL_DATA) {
+        if (inargflags & FUSE_AUTO_INVAL_DATA) {
             /* ... enable fopen_keep_cache mode if supported.
              */
             gf_log("glusterfs-fuse", GF_LOG_DEBUG,
@@ -5248,7 +5256,7 @@ fuse_init(xlator_t *this, fuse_in_header_t *finh, void *msg,
                    "fopen_keep_cache automatically.");
 
             if (priv->fuse_auto_inval)
-                fino.flags |= FUSE_AUTO_INVAL_DATA;
+                outargflags |= FUSE_AUTO_INVAL_DATA;
         } else
 #endif
         {
@@ -5265,11 +5273,11 @@ fuse_init(xlator_t *this, fuse_in_header_t *finh, void *msg,
            then enable FUSE_AUTO_INVAL_DATA if possible.
         */
 #if FUSE_KERNEL_MINOR_VERSION >= 20
-        if (priv->fuse_auto_inval && (fini->flags & FUSE_AUTO_INVAL_DATA)) {
+        if (priv->fuse_auto_inval && (inargflags & FUSE_AUTO_INVAL_DATA)) {
             gf_log("glusterfs-fuse", GF_LOG_DEBUG,
                    "fopen_keep_cache "
                    "is explicitly set. Enabling FUSE_AUTO_INVAL_DATA");
-            fino.flags |= FUSE_AUTO_INVAL_DATA;
+            outargflags |= FUSE_AUTO_INVAL_DATA;
         } else
 #endif
         {
@@ -5281,8 +5289,8 @@ fuse_init(xlator_t *this, fuse_in_header_t *finh, void *msg,
     }
 
 #if FUSE_KERNEL_MINOR_VERSION >= 22
-    if (fini->flags & FUSE_ASYNC_DIO)
-        fino.flags |= FUSE_ASYNC_DIO;
+    if (inargflags & FUSE_ASYNC_DIO)
+        outargflags |= FUSE_ASYNC_DIO;
 #endif
 
     size = sizeof(fino);
@@ -5296,10 +5304,19 @@ fuse_init(xlator_t *this, fuse_in_header_t *finh, void *msg,
     /* Writeback cache support */
     if (fini->minor >= 23) {
         if (priv->kernel_writeback_cache)
-            fino.flags |= FUSE_WRITEBACK_CACHE;
+            outargflags |= FUSE_WRITEBACK_CACHE;
         fino.time_gran = priv->attr_times_granularity;
     }
 #endif
+
+#if FUSE_KERNEL_MINOR_VERSION >= 36
+    if (inargflags & FUSE_INIT_EXT) {
+        outargflags |= FUSE_INIT_EXT;
+        fino.flags2 = outargflags >> 32;
+    }
+#endif
+
+    fino.flags = outargflags;
 
     ret = send_fuse_data(this, finh, &fino, size);
     if (ret == 0)
