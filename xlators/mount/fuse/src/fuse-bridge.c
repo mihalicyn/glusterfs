@@ -5293,6 +5293,20 @@ fuse_init(xlator_t *this, fuse_in_header_t *finh, void *msg,
         outargflags |= FUSE_ASYNC_DIO;
 #endif
 
+#if FUSE_KERNEL_MINOR_VERSION >= 40
+    /*
+     * There is no reason to not enable idmapped mounts support by default
+     * (we do the same in the kernel client), but we need to ensure that:
+     * - kernel fuse driver supports FUSE_CAP_ALLOW_IDMAP extension
+     * - fuse "default_permissions" mode is used (current fuse in kernel driver limitation)
+     *
+     * Notice: when priv->acl is true then "default_permissions" mode is not used (see init() function).
+     */
+    if ((inargflags & FUSE_ALLOW_IDMAP) && !priv->acl) {
+        outargflags |= FUSE_OWNER_UID_GID_EXT | FUSE_ALLOW_IDMAP;
+    }
+#endif
+
     size = sizeof(fino);
 #if FUSE_KERNEL_MINOR_VERSION >= 23
     /* FUSE 7.23 and newer added attributes to the fuse_init_out struct */

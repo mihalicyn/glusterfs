@@ -380,6 +380,29 @@ get_groups(fuse_private_t *priv, call_frame_t *frame)
         GF_FREE(agl.gl_list);
 }
 
+static void
+get_inode_owner_uid_gid(int op_num, fuse_in_header_t *finh)
+{
+    void *end = (void *) finh + finh->len;
+    size_t extlen = finh->total_extlen * 8;
+    struct fuse_ext_header *xh = end - extlen;
+    struct fuse_owner_uid_gid *owner_creds;
+
+    if (op_num != GF_FOP_MKNOD && op_num != GF_FOP_MKDIR && op_num != GF_FOP_SYMLINK && op_num != GF_FOP_CREATE)
+        return;
+
+    GF_ASSERT(extlen < finh->len);
+    for (; (void *) xh < end; xh = (void *) xh + xh->size) {
+        if (xh->type == FUSE_EXT_OWNER_UID_GID) {
+            owner_creds = (struct fuse_owner_uid_gid *) &xh[1];
+
+            finh->uid = owner_creds->uid;
+            finh->gid = owner_creds->gid;
+        }
+    }
+    GF_ASSERT(xh == end);
+}
+
 call_frame_t *
 get_call_frame_for_req(fuse_state_t *state, int op_num)
 {
@@ -401,6 +424,7 @@ get_call_frame_for_req(fuse_state_t *state, int op_num)
     /* helps in logging */
     frame->root->op = op_num;
     if (finh) {
+        get_inode_owner_uid_gid(op_num, finh);
         frame->root->uid = finh->uid;
         frame->root->gid = finh->gid;
         frame->root->pid = finh->pid;
